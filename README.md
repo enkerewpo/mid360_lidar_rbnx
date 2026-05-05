@@ -19,15 +19,17 @@ gRPC method or an MCP tool call).
 | `robonix/primitive/lidar/driver`         | rpc       | gRPC      | `Driver(CMD_INIT, config_json)` — lifecycle |
 | `robonix/primitive/lidar/lidar3d`        | topic_out | ROS 2     | `/scanner/cloud` (PointCloud2)              |
 | `robonix/primitive/lidar/lidar_snapshot` | rpc       | MCP       | one-shot capture (TODO)                     |
-| `robonix/primitive/imu/driver`           | rpc       | gRPC      | `Driver(CMD_INIT, config_json)` — lifecycle |
-| `robonix/primitive/imu/imu`              | topic_out | ROS 2     | `/livox/imu` (sensor_msgs/Imu)              |
 
-Both `lidar/driver` and `imu/driver` are exposed as separate gates.
-They share one underlying init path (the MID-360 is one device — a
-single Init brings up both streams), but the abstraction stays clean:
-an IMU-only consumer can gate on `imu/driver` without knowing the IMU
-happens to live inside a lidar. Whichever gate `rbnx boot` calls
-first triggers the shared Init; the other returns `ready` immediately.
+This package owns the `primitive/lidar/*` namespace and ONLY that
+namespace. The MID-360 also produces an IMU stream (`/livox/imu`,
+published as a side-effect of the same upstream launch) — but the
+`primitive/imu/*` contract surface lives in a separate package
+(`mid360_imu_rbnx`) which subscribes to that topic and atlas-registers
+it. Robonix's invariant is "one primitive namespace = one package";
+mixing lidar + imu in one package would violate it.
+
+Boot ordering: `mid360_imu_rbnx` should be deployed AFTER this package,
+so that `/livox/imu` is already live on the bus when its sentinel runs.
 
 ## Layout
 
