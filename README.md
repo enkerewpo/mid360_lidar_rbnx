@@ -8,13 +8,26 @@ atlas — no hardcoded `/scanner/cloud` paths on the consumer side.
 
 ## Capability surface
 
-| Contract                               | Transport | Source topic / handler            |
-| -------------------------------------- | --------- | --------------------------------- |
-| `robonix/primitive/lidar/driver`       | grpc      | lifecycle gate (TODO)             |
-| `robonix/primitive/lidar/lidar3d`      | topic_out | `/scanner/cloud` (PointCloud2)    |
-| `robonix/primitive/lidar/lidar_snapshot` | mcp     | one-shot capture (TODO)           |
-| `robonix/primitive/imu/driver`         | grpc      | lifecycle gate (TODO)             |
-| `robonix/primitive/imu/imu`            | topic_out | `/livox/imu` (sensor_msgs/Imu)    |
+The `mode` is the abstract communication pattern declared in the
+contract TOML (rpc / topic_in / topic_out). The `transport` column
+records how THIS package realises it on the wire — both matter because
+the same mode can ride different middleware (an `rpc` mode can be a
+gRPC method or an MCP tool call).
+
+| Contract                                 | Mode      | Transport | Source / handler                            |
+| ---------------------------------------- | --------- | --------- | ------------------------------------------- |
+| `robonix/primitive/lidar/driver`         | rpc       | gRPC      | `Driver(CMD_INIT, config_json)` — lifecycle |
+| `robonix/primitive/lidar/lidar3d`        | topic_out | ROS 2     | `/scanner/cloud` (PointCloud2)              |
+| `robonix/primitive/lidar/lidar_snapshot` | rpc       | MCP       | one-shot capture (TODO)                     |
+| `robonix/primitive/imu/driver`           | rpc       | gRPC      | `Driver(CMD_INIT, config_json)` — lifecycle |
+| `robonix/primitive/imu/imu`              | topic_out | ROS 2     | `/livox/imu` (sensor_msgs/Imu)              |
+
+Both `lidar/driver` and `imu/driver` are exposed as separate gates.
+They share one underlying init path (the MID-360 is one device — a
+single Init brings up both streams), but the abstraction stays clean:
+an IMU-only consumer can gate on `imu/driver` without knowing the IMU
+happens to live inside a lidar. Whichever gate `rbnx boot` calls
+first triggers the shared Init; the other returns `ready` immediately.
 
 ## Layout
 

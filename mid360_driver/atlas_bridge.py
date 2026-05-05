@@ -228,75 +228,93 @@ def _decl_topic_out(contract_id: str, topic: str, qos_profile: str = "best_effor
 
 
 # ── lifecycle Driver gRPC server ─────────────────────────────────────────────
-class _LidarDriverServicer(contracts_grpc.PrimitiveLidarDriverServicer):
-    def Driver(self, request, context):
-        cmd = int(request.command)
-        if cmd == CMD_INIT:
-            try:
-                cfg = json.loads(request.config_json) if request.config_json else {}
-            except json.JSONDecodeError as e:
-                return lifecycle_pb2.Driver_Response(
-                    ok=False, state="error", error=f"bad config_json: {e}"
-                )
-            return self._init(cfg)
-        if cmd == CMD_SHUTDOWN:
-            _kill_livox()
-            return lifecycle_pb2.Driver_Response(ok=True, state="shutdown", error="")
+# The MID-360 is one device → one shared Init path. We expose it under
+# BOTH `primitive/lidar/driver` and `primitive/imu/driver` so consumers
+# of either contract get a clean lifecycle gate. Whichever servicer is
+# called first does the work; the other returns `ready` immediately
+# (idempotent — `_initialized` flag).
+def _do_init(cfg: dict):
+    global _initialized
+    with _state_lock:
+        if _initialized:
+            return lifecycle_pb2.Driver_Response(ok=True, state="ready", error="")
+
+    lidar_topic = cfg.get("lidar_topic", "/scanner/cloud")
+    imu_topic = cfg.get("imu_topic", "/livox/imu")
+    sentinel_timeout = float(cfg.get("sentinel_timeout_s", 30.0))
+
+    try:
+        _spawn_livox(cfg)
+    except Exception as e:  # noqa: BLE001
         return lifecycle_pb2.Driver_Response(
-            ok=False, state="error", error=f"invalid command {cmd}"
+            ok=False, state="error", error=f"spawn livox failed: {e}"
         )
 
-    def _init(self, cfg: dict):
-        global _initialized
-        with _state_lock:
-            if _initialized:
-                return lifecycle_pb2.Driver_Response(ok=True, state="ready", error="")
+    if not _wait_for_topic(lidar_topic, "PointCloud2", sentinel_timeout):
+        _kill_livox()
+        return lifecycle_pb2.Driver_Response(
+            ok=False, state="error",
+            error=f"no PointCloud2 on {lidar_topic} within {sentinel_timeout:.1f}s",
+        )
 
-        lidar_topic = cfg.get("lidar_topic", "/scanner/cloud")
-        imu_topic = cfg.get("imu_topic", "/livox/imu")
-        sentinel_timeout = float(cfg.get("sentinel_timeout_s", 30.0))
-
-        try:
-            _spawn_livox(cfg)
-        except Exception as e:  # noqa: BLE001
+    # Declare the data interfaces. IMU shares the cap_id; we don't
+    # gate on its first message because the lidar already proved
+    # the device is talking — the IMU stream comes from the same
+    # firmware path.
+    try:
+        _decl_topic_out("robonix/primitive/lidar/lidar3d", lidar_topic)
+        _decl_topic_out("robonix/primitive/imu/imu",       imu_topic)
+    except grpc.RpcError as e:
+        if e.code() != grpc.StatusCode.ALREADY_EXISTS:
             return lifecycle_pb2.Driver_Response(
-                ok=False, state="error", error=f"spawn livox failed: {e}"
+                ok=False, state="error", error=f"declare failed: {e.details()}"
             )
 
-        if not _wait_for_topic(lidar_topic, "PointCloud2", sentinel_timeout):
-            _kill_livox()
-            return lifecycle_pb2.Driver_Response(
-                ok=False, state="error",
-                error=f"no PointCloud2 on {lidar_topic} within {sentinel_timeout:.1f}s",
-            )
+    with _state_lock:
+        _initialized = True
+    log.info("init complete: lidar3d=%s imu=%s", lidar_topic, imu_topic)
+    return lifecycle_pb2.Driver_Response(ok=True, state="ready", error="")
 
-        # Declare the data interfaces. IMU shares the cap_id; we don't
-        # gate on its first message because the lidar already proved
-        # the device is talking — the IMU stream comes from the same
-        # firmware path.
+
+def _handle_driver(request):
+    cmd = int(request.command)
+    if cmd == CMD_INIT:
         try:
-            _decl_topic_out("robonix/primitive/lidar/lidar3d", lidar_topic)
-            _decl_topic_out("robonix/primitive/imu/imu",       imu_topic)
-        except grpc.RpcError as e:
-            if e.code() != grpc.StatusCode.ALREADY_EXISTS:
-                return lifecycle_pb2.Driver_Response(
-                    ok=False, state="error", error=f"declare failed: {e.details()}"
-                )
+            cfg = json.loads(request.config_json) if request.config_json else {}
+        except json.JSONDecodeError as e:
+            return lifecycle_pb2.Driver_Response(
+                ok=False, state="error", error=f"bad config_json: {e}"
+            )
+        return _do_init(cfg)
+    if cmd == CMD_SHUTDOWN:
+        _kill_livox()
+        return lifecycle_pb2.Driver_Response(ok=True, state="shutdown", error="")
+    return lifecycle_pb2.Driver_Response(
+        ok=False, state="error", error=f"invalid command {cmd}"
+    )
 
-        with _state_lock:
-            _initialized = True
-        log.info("init complete: lidar3d=%s imu=%s", lidar_topic, imu_topic)
-        return lifecycle_pb2.Driver_Response(ok=True, state="ready", error="")
+
+class _LidarDriverServicer(contracts_grpc.PrimitiveLidarDriverServicer):
+    def Driver(self, request, context):
+        return _handle_driver(request)
+
+
+class _ImuDriverServicer(contracts_grpc.PrimitiveImuDriverServicer):
+    def Driver(self, request, context):
+        return _handle_driver(request)
 
 
 def _start_driver_grpc(port: int) -> None:
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     contracts_grpc.add_PrimitiveLidarDriverServicer_to_server(
         _LidarDriverServicer(), server
     )
+    contracts_grpc.add_PrimitiveImuDriverServicer_to_server(
+        _ImuDriverServicer(), server
+    )
     server.add_insecure_port(f"[::]:{port}")
     server.start()
-    log.info("LifecycleDriver gRPC serving on 0.0.0.0:%d", port)
+    log.info("LifecycleDriver gRPC serving on 0.0.0.0:%d (lidar+imu)", port)
 
 
 def _decl_driver_iface(port: int) -> None:
@@ -310,6 +328,17 @@ def _decl_driver_iface(port: int) -> None:
         params=pb.TransportParams(grpc=pb.GrpcParams(
             proto_file="robonix_contracts.proto",
             service_name="PrimitiveLidarDriver",
+            method="Driver",
+        )),
+    ))
+    _atlas_stub.DeclareInterface(pb.DeclareInterfaceRequest(
+        capability_id=_cap_id,
+        contract_id="robonix/primitive/imu/driver",
+        transport=pb.TRANSPORT_GRPC,
+        endpoint=f"127.0.0.1:{port}",
+        params=pb.TransportParams(grpc=pb.GrpcParams(
+            proto_file="robonix_contracts.proto",
+            service_name="PrimitiveImuDriver",
             method="Driver",
         )),
     ))

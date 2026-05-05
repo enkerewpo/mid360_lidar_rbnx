@@ -1,26 +1,38 @@
 # Livox MID-360 lidar primitive for Ranger Mini.
 #
-# Wraps the upstream `livox_ros_driver2` (already cloned + built in
-# the Jetson's colcon_ws). Spawns its launch file, then atlas-
-# registers the topics it produces under primitive/lidar/* and
-# primitive/imu/* contracts. Consumers (mapping_rbnx, scene) discover
-# the topic names via atlas — no hardcoded `/livox/lidar` path on
-# the consumer side.
+# Wraps the upstream `livox_ros_driver2` (vendored under
+# src/livox_ros_driver2 — colcon-built into rbnx-build/ws/install during
+# `rbnx build`). Atlas-registers the topics it produces under
+# primitive/lidar/* and primitive/imu/* contracts so consumers
+# (mapping_rbnx, scene) discover the topic names via atlas — no
+# hardcoded `/scanner/cloud` paths on the consumer side.
 #
-# Capability surface:
-#   primitive/lidar/lidar3d        topic_out  PointCloud2 (Livox custom OFF)
-#   primitive/lidar/lidar_snapshot mcp        latest cloud as JPEG / npz (TODO)
-#   primitive/lidar/driver         grpc       lifecycle Driver(INIT) gates rbnx boot
-#   primitive/imu/imu              topic_out  sensor_msgs/Imu (mid360 has IMU)
-#   primitive/imu/driver           grpc       same lifecycle gate
+# Lifecycle: start.sh launches the atlas bridge ONLY (no ROS spawn).
+# `rbnx boot` then calls `Driver(CMD_INIT, config_json)` on the
+# primitive/lidar/driver gRPC interface — that handler parses config,
+# starts the upstream livox launch, waits for the first PointCloud2,
+# and only THEN declares lidar3d / imu data interfaces on atlas.
 #
-# Config (passed via RBNX_CONFIG_FILE):
-#   livox_config_path: path to the JSON config livox_ros_driver2 wants
-#                       (host network info etc). When unset, the driver
-#                       launch falls back to its packaged default.
-#   xfer_format:        "PointCloud2" (default) or "Livox"
-#                       (CustomMsg — 3rd-party only). Mapping/rtabmap
-#                       only consumes PointCloud2.
+# Capability surface (mode = abstract pattern, transport = wire):
+#   primitive/lidar/driver         mode=rpc        transport=gRPC
+#   primitive/lidar/lidar3d        mode=topic_out  transport=ROS2  PointCloud2 XYZIT
+#   primitive/lidar/lidar_snapshot mode=rpc        transport=MCP   (TODO)
+#   primitive/imu/driver           mode=rpc        transport=gRPC
+#   primitive/imu/imu              mode=topic_out  transport=ROS2  sensor_msgs/Imu
+#
+# Both `lidar/driver` and `imu/driver` are exposed. They share the same
+# underlying lifecycle (one Init brings up the whole MID-360), but the
+# abstraction stays clean: an IMU-only consumer gates on `imu/driver`
+# without needing to know that the IMU happens to live inside a lidar.
+# Either gRPC servicer's Driver() handler will trigger the shared Init.
+#
+# Config (passed via `Driver(CMD_INIT, config_json)`):
+#   lidar_topic        default "/scanner/cloud"      (matches our lddc.cpp patch)
+#   imu_topic          default "/livox/imu"
+#   lidar_ip           default 192.168.1.161         (override per robot)
+#   host_ip            default auto from `ip route get <lidar_ip>`
+#   xfer_format        default 2                     (PointCloud2 XYZIT)
+#   sentinel_timeout_s default 30.0
 manifestVersion: 1
 
 package:
