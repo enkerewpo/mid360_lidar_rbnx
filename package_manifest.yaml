@@ -1,0 +1,41 @@
+# Livox MID-360 lidar primitive for Ranger Mini.
+#
+# Wraps the upstream `livox_ros_driver2` (already cloned + built in
+# the Jetson's colcon_ws). Spawns its launch file, then atlas-
+# registers the topics it produces under primitive/lidar/* and
+# primitive/imu/* contracts. Consumers (mapping_rbnx, scene) discover
+# the topic names via atlas — no hardcoded `/livox/lidar` path on
+# the consumer side.
+#
+# Capability surface:
+#   primitive/lidar/lidar3d        topic_out  PointCloud2 (Livox custom OFF)
+#   primitive/lidar/lidar_snapshot mcp        latest cloud as JPEG / npz (TODO)
+#   primitive/lidar/driver         grpc       lifecycle Driver(INIT) gates rbnx boot
+#   primitive/imu/imu              topic_out  sensor_msgs/Imu (mid360 has IMU)
+#   primitive/imu/driver           grpc       same lifecycle gate
+#
+# Config (passed via RBNX_CONFIG_FILE):
+#   livox_config_path: path to the JSON config livox_ros_driver2 wants
+#                       (host network info etc). When unset, the driver
+#                       launch falls back to its packaged default.
+#   xfer_format:        "PointCloud2" (default) or "Livox"
+#                       (CustomMsg — 3rd-party only). Mapping/rtabmap
+#                       only consumes PointCloud2.
+manifestVersion: 1
+
+package:
+  name: com.robonix.ranger.mid360_lidar
+  version: 0.1.0
+  vendor: robonix
+  description: Livox MID-360 driver wrapper — declares lidar3d + IMU contracts.
+  license: MulanPSL-2.0
+
+build: bash scripts/build.sh
+start: bash scripts/start.sh
+
+capabilities:
+  - name: robonix/primitive/lidar/driver
+  - name: robonix/primitive/lidar/lidar3d
+  - name: robonix/primitive/lidar/lidar_snapshot
+  - name: robonix/primitive/imu/driver
+  - name: robonix/primitive/imu/imu
