@@ -21,6 +21,14 @@ if [[ "$CLEAN" == "1" ]]; then
 fi
 mkdir -p rbnx-build/ws/src rbnx-build/data
 
+# Materialise package.xml from package_ROS2.xml. Livox upstream gitignores
+# package.xml because it supports dual ROS1/ROS2 builds — package.xml is a
+# build-time copy of the chosen variant. Skip if user already produced one.
+if [[ ! -f "$PKG/src/livox_ros_driver2/package.xml" ]]; then
+    cp "$PKG/src/livox_ros_driver2/package_ROS2.xml" \
+       "$PKG/src/livox_ros_driver2/package.xml"
+fi
+
 # Symlink the vendored source into a scratch ws so colcon can find it
 # without polluting our src/ tree with build artefacts.
 ln -snf "$PKG/src/livox_ros_driver2" "$PKG/rbnx-build/ws/src/livox_ros_driver2"
