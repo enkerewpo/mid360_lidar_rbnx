@@ -45,6 +45,8 @@ package:
   description: Livox MID-360 driver wrapper — declares lidar3d + IMU contracts.
   license: MulanPSL-2.0
 
+capability_id: mid360_lidar
+
 build: bash scripts/build.sh
 start: bash scripts/start.sh
 
