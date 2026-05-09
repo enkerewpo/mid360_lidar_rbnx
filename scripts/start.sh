@@ -8,18 +8,15 @@
 #   rbnx-build/ws/install/setup.bash   colcon overlay (livox_ros_driver2)
 #   rbnx-build/codegen/proto_gen/      atlas_pb2.py + robonix_contracts_pb2*
 set -euo pipefail
-: "${AMENT_TRACE_SETUP_FILES:=}"
-: "${COLCON_TRACE:=}"
-export AMENT_TRACE_SETUP_FILES COLCON_TRACE
 PKG="${RBNX_PACKAGE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$PKG"
 
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 # shellcheck disable=SC1091
-source "/opt/ros/${ROS_DISTRO}/setup.bash"
+set +u; source "/opt/ros/${ROS_DISTRO}/setup.bash"; set -u
 if [[ -f "$PKG/rbnx-build/ws/install/setup.bash" ]]; then
     # shellcheck disable=SC1091
-    source "$PKG/rbnx-build/ws/install/setup.bash"
+    set +u; source "$PKG/rbnx-build/ws/install/setup.bash"; set -u
 else
     echo "[mid360_lidar/start] ERROR: rbnx-build/ws/install missing — run rbnx build first" >&2
     exit 1
