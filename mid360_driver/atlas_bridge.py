@@ -73,7 +73,9 @@ import lifecycle_pb2  # noqa: E402
 import robonix_contracts_pb2_grpc as contracts_grpc  # noqa: E402
 
 CMD_INIT = 0
-CMD_SHUTDOWN = 1
+CMD_ACTIVATE = 1
+CMD_DEACTIVATE = 2
+CMD_SHUTDOWN = 3
 
 
 # ── shared state populated by Init ───────────────────────────────────────────
@@ -243,9 +245,17 @@ class _LidarDriverServicer(contracts_grpc.PrimitiveLidarDriverServicer):
                     ok=False, state="error", error=f"bad config_json: {e}"
                 )
             return self._init(cfg)
+        if cmd == CMD_ACTIVATE:
+            # primitives do all bring-up in CMD_INIT; ACTIVATE
+            # is a framework no-op that flips the cap to ACTIVE
+            # so consumers may begin calling.
+            return lifecycle_pb2.Driver_Response(ok=True, state="active", error="")
+        if cmd == CMD_DEACTIVATE:
+            # framework no-op back to INACTIVE; v1 doesn't evict.
+            return lifecycle_pb2.Driver_Response(ok=True, state="inactive", error="")
         if cmd == CMD_SHUTDOWN:
             _kill_livox()
-            return lifecycle_pb2.Driver_Response(ok=True, state="shutdown", error="")
+            return lifecycle_pb2.Driver_Response(ok=True, state="terminated", error="")
         return lifecycle_pb2.Driver_Response(
             ok=False, state="error", error=f"invalid command {cmd}"
         )
@@ -254,7 +264,7 @@ class _LidarDriverServicer(contracts_grpc.PrimitiveLidarDriverServicer):
         global _initialized
         with _state_lock:
             if _initialized:
-                return lifecycle_pb2.Driver_Response(ok=True, state="ready", error="")
+                return lifecycle_pb2.Driver_Response(ok=True, state="inactive", error="")
 
         lidar_topic = cfg.get("lidar_topic", "/scanner/cloud")
         sentinel_timeout = float(cfg.get("sentinel_timeout_s", 30.0))
@@ -284,7 +294,7 @@ class _LidarDriverServicer(contracts_grpc.PrimitiveLidarDriverServicer):
         with _state_lock:
             _initialized = True
         log.info("init complete: lidar3d=%s", lidar_topic)
-        return lifecycle_pb2.Driver_Response(ok=True, state="ready", error="")
+        return lifecycle_pb2.Driver_Response(ok=True, state="inactive", error="")
 
 
 def _start_driver_grpc(port: int) -> None:
