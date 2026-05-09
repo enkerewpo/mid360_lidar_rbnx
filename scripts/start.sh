@@ -8,6 +8,9 @@
 #   rbnx-build/ws/install/setup.bash   colcon overlay (livox_ros_driver2)
 #   rbnx-build/codegen/proto_gen/      atlas_pb2.py + robonix_contracts_pb2*
 set -euo pipefail
+: "${AMENT_TRACE_SETUP_FILES:=}"
+: "${COLCON_TRACE:=}"
+export AMENT_TRACE_SETUP_FILES COLCON_TRACE
 PKG="${RBNX_PACKAGE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$PKG"
 

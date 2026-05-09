@@ -185,7 +185,7 @@ def init(cfg: dict):
         _kill_livox()
         return Err(f"no PointCloud2 on {lidar_topic} within {sentinel_timeout:.1f}s")
 
-    cap.declare_ros2(
+    cap.declare_ros2_topic(
         "robonix/primitive/lidar/lidar3d",
         topic=lidar_topic,
         qos="best_effort",

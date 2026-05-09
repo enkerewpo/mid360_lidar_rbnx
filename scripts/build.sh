@@ -11,6 +11,12 @@
 # Output goes into rbnx-build/{ws/install,codegen}/. start.sh
 # sources rbnx-build/ws/install/setup.bash before launching.
 set -euo pipefail
+# ROS 2 humble setup.bash references AMENT_TRACE_SETUP_FILES /
+# COLCON_TRACE without an [ -z ] guard, so under `set -u` they
+# trip "unbound variable". Initialise to empty.
+: "${AMENT_TRACE_SETUP_FILES:=}"
+: "${COLCON_TRACE:=}"
+export AMENT_TRACE_SETUP_FILES COLCON_TRACE
 PKG="${RBNX_PACKAGE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$PKG"
 CLEAN="${RBNX_BUILD_CLEAN:-}"
