@@ -15,8 +15,20 @@ ROS_DISTRO="${ROS_DISTRO:-humble}"
 # shellcheck disable=SC1091
 set +u; source "/opt/ros/${ROS_DISTRO}/setup.bash"; set -u
 if [[ -f "$PKG/rbnx-build/ws/install/setup.bash" ]]; then
+    # WORKAROUND: rbnx codegen overwrites ws/install/setup.bash with a
+    # PYTHONPATH-only stub, clobbering colcon's chain to local_setup
+    # and losing AMENT_PREFIX_PATH for the vendored livox_ros_driver2.
+    # Source colcon's local_setup.bash first (real overlay), then the
+    # codegen stub on top (its PYTHONPATH for proto_gen imports). The
+    # right architectural fix is to move codegen's stub out of
+    # ws/install — until then, this two-step source keeps both paths.
     # shellcheck disable=SC1091
-    set +u; source "$PKG/rbnx-build/ws/install/setup.bash"; set -u
+    set +u
+    if [[ -f "$PKG/rbnx-build/ws/install/local_setup.bash" ]]; then
+        source "$PKG/rbnx-build/ws/install/local_setup.bash"
+    fi
+    source "$PKG/rbnx-build/ws/install/setup.bash"
+    set -u
 else
     echo "[mid360_lidar/start] ERROR: rbnx-build/ws/install missing — run rbnx build first" >&2
     exit 1
