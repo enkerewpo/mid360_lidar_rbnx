@@ -18,7 +18,17 @@ Config (from manifest's `config:` block, delivered via Driver(CMD_INIT)):
     host_ip            default auto from `ip route get <lidar_ip>`
     xfer_format        default 2  (PointCloud2 XYZIT — rtabmap-friendly)
     publish_freq       default 10.0
-    frame_id           default "livox_frame"
+    frame_id           default "livox_frame"  (lidar's own frame on /tf)
+    parent_frame       default "base_link"    (body frame for the STP)
+    extrinsics         optional 6-DoF mount pose of the lidar in
+                       parent_frame. Shape: {x, y, z, roll, pitch, yaw}
+                       (radians). When present we spawn a
+                       static_transform_publisher parent_frame → frame_id
+                       so consumers (mapping etc.) see a complete TF
+                       tree without needing chassis or soma. Skip when
+                       a chassis driver / soma URDF already publishes
+                       the same edge — double-publishing TFs causes
+                       'TF_REPEATED_DATA ignoring data' warnings.
     sentinel_timeout_s default 30.0
 """
 from __future__ import annotations
@@ -44,6 +54,7 @@ cap = Capability(id="mid360_lidar", namespace="robonix/primitive/lidar")
 
 _pkg_root: Path = Path(__file__).resolve().parent.parent
 _livox_proc: subprocess.Popen | None = None
+_stp_proc: subprocess.Popen | None = None
 
 
 # ── livox subprocess management ──────────────────────────────────────────
@@ -133,6 +144,60 @@ def _kill_livox() -> None:
             pass
 
 
+# ── static_transform_publisher: parent_frame → frame_id ──────────────────
+# Owned by the lidar primitive because the lidar is the sensor that
+# *knows* its own frame id; `extrinsics` in cfg is the mount pose
+# declared by whoever assembled the robot (deploy manifest). With
+# A: primitive-publishes-its-own-static-TF, mapping never has to
+# learn vendor frame names — every consumer sees a complete tree
+# rooted at base_link.
+def _spawn_stp(cfg: dict) -> None:
+    global _stp_proc
+    ext = cfg.get("extrinsics")
+    if not ext:
+        log.info("no extrinsics in cfg; assuming chassis/soma publishes "
+                 "parent_frame → frame_id elsewhere")
+        return
+    parent = str(cfg.get("parent_frame", "base_link"))
+    child = str(cfg.get("frame_id", "livox_frame"))
+    args = [
+        "ros2", "run", "tf2_ros", "static_transform_publisher",
+        "--x", str(float(ext.get("x", 0.0))),
+        "--y", str(float(ext.get("y", 0.0))),
+        "--z", str(float(ext.get("z", 0.0))),
+        "--roll", str(float(ext.get("roll", 0.0))),
+        "--pitch", str(float(ext.get("pitch", 0.0))),
+        "--yaw", str(float(ext.get("yaw", 0.0))),
+        "--frame-id", parent,
+        "--child-frame-id", child,
+    ]
+    log_path = _pkg_root / "rbnx-build" / "data" / "stp.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(log_path, "ab", buffering=0)
+    log.info("spawning static_transform_publisher %s → %s @ %s",
+             parent, child, ext)
+    _stp_proc = subprocess.Popen(
+        args, stdout=log_fh, stderr=log_fh, start_new_session=True,
+    )
+
+
+def _kill_stp() -> None:
+    p = _stp_proc
+    if p is None or p.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        p.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 # ── sentinel: wait for first PointCloud2 ─────────────────────────────────
 def _wait_for_pointcloud(topic: str, timeout_s: float) -> bool:
     try:
@@ -185,6 +250,13 @@ def init(cfg: dict):
         _kill_livox()
         return Err(f"no PointCloud2 on {lidar_topic} within {sentinel_timeout:.1f}s")
 
+    # parent_frame → frame_id static TF (no-op when extrinsics absent).
+    try:
+        _spawn_stp(cfg)
+    except Exception as e:  # noqa: BLE001
+        _kill_livox()
+        return Err(f"spawn static_transform_publisher failed: {e}")
+
     cap.declare_ros2_topic(
         "robonix/primitive/lidar/lidar3d",
         topic=lidar_topic,
@@ -196,6 +268,7 @@ def init(cfg: dict):
 
 @cap.on_shutdown
 def shutdown():
+    _kill_stp()
     _kill_livox()
     return Ok()
 
